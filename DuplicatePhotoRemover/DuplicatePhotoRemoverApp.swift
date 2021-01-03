@@ -9,9 +9,11 @@ import SwiftUI
 
 @main
 struct DuplicatePhotoRemoverApp: App {
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
     }
+    
 }
