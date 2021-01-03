@@ -63,9 +63,15 @@ struct ProgressBar: View {
     
 }
 
-struct DuplicateItem: Identifiable {
-  var id = UUID()
-  var image: PHAsset
+struct DuplicateItem: Identifiable, Equatable {
+    
+    var id = UUID()
+    var image: PHAsset
+    
+    static func == (lhs: DuplicateItem, rhs: DuplicateItem) -> Bool {
+        return lhs.image == rhs.image
+    }
+    
 }
 
 struct ContentView: View {
@@ -75,8 +81,10 @@ struct ContentView: View {
     
     @State private var running = false
     
-    @State private var duplicates: [PHAsset: [PHAsset]] = [:]
+    @State private var duplicates: [PHAsset: [DuplicateItem]] = [:]
     @State private var duplicateItems: [DuplicateItem] = []
+    
+    @State private var selectedDuplicate: PHAsset? = nil
     
     var body: some View {
         VStack {
@@ -105,14 +113,76 @@ struct ContentView: View {
                     .padding()
                 
                 Text("Found \(self.duplicateItems.count) Duplicates")
+                    .padding()
+                
+            } else {
+                
+                HStack {
+                    
+                    List(self.duplicateItems) { duplicate in
+                                        
+                        HStack {
+                            Button(action: {
+                                self.selectedDuplicate = duplicate.image
+                            }) {
+                                getThumnail(asset: duplicate.image)
+                            }.buttonStyle(PlainButtonStyle())
+                            getImageLabel(asset: duplicate.image)
+                        }
+                    }
+                    
+                    ScrollView {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 138))]) {
+                            if (selectedDuplicate != nil) {
+                                ForEach(self.duplicates[self.selectedDuplicate!] ?? []) { duplicate in
+                                    VStack {
+                                        getThumnail(asset: duplicate.image).padding()
+                                        getImageLabel(asset: duplicate.image).padding()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                }
+                .frame(height: 138 * 4)
                 
             }
             
-            List(self.duplicateItems) { duplicate in
-                Text("\(duplicate.image.creationDate!)")
-            }
         }
         
+    }
+
+
+    
+    func getImageLabel(asset: PHAsset) -> Text {
+        
+        if (asset.creationDate == nil) {
+            return Text("No Image META")
+        }
+        
+        let RFC3339DateFormatter = DateFormatter()
+        RFC3339DateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        RFC3339DateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        RFC3339DateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return Text(RFC3339DateFormatter.string(from: asset.creationDate!))
+        
+    }
+    
+    func getThumnail(asset: PHAsset) -> Image? {
+        let manager = PHImageManager.default()
+        let option = PHImageRequestOptions()
+        let size = CGSize(width: 138, height: 138)
+        option.isSynchronous = true
+
+        var thumbnail: Image? = nil
+        option.isSynchronous = true
+        manager.requestImage(for: asset, targetSize: size, contentMode: .aspectFit, options: option, resultHandler: {(result, info)->Void in
+            thumbnail = Image(nsImage: result!)
+                .renderingMode(.original)
+        })
+        
+        return thumbnail
     }
     
     func runDuplicateCheck() {
@@ -146,6 +216,20 @@ struct ContentView: View {
             // the one to match!
             let toMatch = allPhotos.object(at: innerCount)
             
+            var alreadyFound = false
+            for (duplicate, _) in self.duplicates {
+                if (duplicate.creationDate == toMatch.creationDate && duplicate.mediaSubtypes == toMatch.mediaSubtypes) {
+                    self.duplicates[duplicate]!.append(DuplicateItem(image: toMatch))
+                    alreadyFound = true
+                    break
+                }
+            }
+            
+            if (alreadyFound) {
+                innerCount += 1
+                continue
+            }
+            
             while (outerCount < allPhotos.count) {
                 
                 // we don't want to mark ourself as a duplicate!
@@ -162,8 +246,17 @@ struct ContentView: View {
                 // the one to compare
                 let toCompare = allPhotos.object(at: outerCount)
                 
+                // if we've already got the to match image in here, and the opposite duplicate, continue!
+                if (self.duplicates.keys.contains(toCompare)) {
+                    if (self.duplicates[toCompare]!.contains(DuplicateItem(image: toMatch))) {
+                        outerCount += 1
+                        continue
+                    }
+                }
+                
                 // if they have the exact same date, they might be a duplicate!
-                if (toCompare.creationDate == toMatch.creationDate) {
+                // ensure we compare the media subtypes, so that HDR copies aren'tmarked as duplicates
+                if (toCompare.creationDate == toMatch.creationDate && toCompare.mediaSubtypes == toMatch.mediaSubtypes) {
                     
                     // if the duplicates doesn't already contain this key
                     if (!self.duplicates.keys.contains(toMatch)) {
@@ -172,7 +265,7 @@ struct ContentView: View {
                     }
                     
                     // add this into the list!
-                    self.duplicates[toMatch]!.append(toCompare)
+                    self.duplicates[toMatch]!.append(DuplicateItem(image: toMatch))
                     
                 }
                 
