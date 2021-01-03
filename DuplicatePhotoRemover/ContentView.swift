@@ -87,17 +87,11 @@ struct ContentView: View {
     @State private var selectedDuplicate: PHAsset? = nil
     
     var body: some View {
-        VStack {
-
-            Button("Look for duplicates") {
-                self.running = true
-                DispatchQueue.global(qos: .background).async {
-                    runDuplicateCheck()
-                }
-            }.padding()
-
-            if self.running {
-                
+        
+        if self.running {
+            
+            VStack(spacing: 12.0) {
+            
                 Button("Stop Duplicate Check") {
                     self.running = false
                 }
@@ -107,15 +101,29 @@ struct ContentView: View {
                     maxValue: photoCount,
                     foregroundColor: .green
                 ).frame(height: 10)
-                    .padding()
                 
                 Text("\(currentPhotoIndex) of \(photoCount)")
-                    .padding()
                 
                 Text("Found \(self.duplicateItems.count) Duplicates")
-                    .padding()
                 
-            } else {
+                // ensure we fill the rest with empty space!
+                Spacer()
+                
+            }
+            .padding()
+            
+        } else {
+            
+            VStack(spacing: 12.0) {
+                
+                Button("Look for duplicates") {
+                    self.running = true
+                    DispatchQueue.global(qos: .background).async {
+                        runDuplicateCheck()
+                    }
+                }.padding()
+
+                Text("Found \(self.duplicateItems.count) Duplicates")
                 
                 HStack {
                     
@@ -127,8 +135,13 @@ struct ContentView: View {
                             }) {
                                 getThumnail(asset: duplicate.image)
                             }.buttonStyle(PlainButtonStyle())
-                            getImageLabel(asset: duplicate.image)
+                            Button(action: {
+                                self.selectedDuplicate = duplicate.image
+                            }) {
+                                getImageLabel(duplicate: duplicate)
+                            }.buttonStyle(PlainButtonStyle())
                         }
+                        
                     }
                     
                     ScrollView {
@@ -137,7 +150,7 @@ struct ContentView: View {
                                 ForEach(self.duplicates[self.selectedDuplicate!] ?? []) { duplicate in
                                     VStack {
                                         getThumnail(asset: duplicate.image).padding()
-                                        getImageLabel(asset: duplicate.image).padding()
+                                        getImageLabel(duplicate: duplicate).padding()
                                     }
                                 }
                             }
@@ -145,19 +158,19 @@ struct ContentView: View {
                     }
                     
                 }
-                .frame(height: 138 * 4)
+                
+                // ensure we fill the rest with empty space!
+                Spacer()
                 
             }
             
         }
-        
+            
     }
-
-
     
-    func getImageLabel(asset: PHAsset) -> Text {
+    func getImageLabel(duplicate: DuplicateItem) -> Text {
         
-        if (asset.creationDate == nil) {
+        if (duplicate.image.creationDate == nil) {
             return Text("No Image META")
         }
         
@@ -165,7 +178,8 @@ struct ContentView: View {
         RFC3339DateFormatter.locale = Locale(identifier: "en_US_POSIX")
         RFC3339DateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         RFC3339DateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return Text(RFC3339DateFormatter.string(from: asset.creationDate!))
+
+        return Text("\(RFC3339DateFormatter.string(from: duplicate.image.creationDate!))")
         
     }
     
@@ -184,7 +198,16 @@ struct ContentView: View {
         
         return thumbnail
     }
-    
+        
+    // work out if an image is a duplicate!
+    func imageIsDuplicate(lhs: PHAsset, rhs: PHAsset) -> Bool {
+        // if they have the exact same date, they might be a duplicate!
+        // ensure we compare the media subtypes, so that HDR copies aren'tmarked as duplicates
+        // check the dimensions of the image as well, just so crops don't appear as duplicates.
+        return lhs.creationDate == rhs.creationDate && lhs.mediaSubtypes == rhs.mediaSubtypes &&
+            lhs.pixelWidth == rhs.pixelWidth && lhs.pixelHeight == rhs.pixelHeight
+    }
+
     func runDuplicateCheck() {
         
         let allPhotosOptions = PHFetchOptions()
@@ -194,100 +217,110 @@ struct ContentView: View {
         // update our max value
         self.photoCount = allPhotos.count
         
-        var innerCount = 0
-        var outerCount = 0
-
         // empty the duplicates list!
         self.duplicates = [:]
         self.duplicateItems = []
         
-        while (innerCount < allPhotos.count) {
+        allPhotos.enumerateObjects({ (toMatch, matchIndex, stop) in
             
             if (!self.running) {
                 print("Stopping inner")
+                stop.pointee = true
                 return
             }
+                                    
+            checkSingleImage(matchIndex: matchIndex, toMatch: toMatch, allPhotos: allPhotos)
+
+            self.currentPhotoIndex = matchIndex + 1
             
-            // dump this onto the main thread, we've updated things!
-            DispatchQueue.main.async {
-                self.currentPhotoIndex = innerCount + 1
-            }
-            
-            // the one to match!
-            let toMatch = allPhotos.object(at: innerCount)
-            
-            var alreadyFound = false
-            for (duplicate, _) in self.duplicates {
-                if (duplicate.creationDate == toMatch.creationDate && duplicate.mediaSubtypes == toMatch.mediaSubtypes) {
-                    self.duplicates[duplicate]!.append(DuplicateItem(image: toMatch))
-                    alreadyFound = true
-                    break
-                }
-            }
-            
-            if (alreadyFound) {
-                innerCount += 1
-                continue
-            }
-            
-            while (outerCount < allPhotos.count) {
-                
-                // we don't want to mark ourself as a duplicate!
-                if (outerCount == innerCount) {
-                    outerCount += 1
-                    continue
-                }
-                
-                if (!self.running) {
-                    print("Stopping outer")
-                    return
-                }
-                
-                // the one to compare
-                let toCompare = allPhotos.object(at: outerCount)
-                
-                // if we've already got the to match image in here, and the opposite duplicate, continue!
-                if (self.duplicates.keys.contains(toCompare)) {
-                    if (self.duplicates[toCompare]!.contains(DuplicateItem(image: toMatch))) {
-                        outerCount += 1
-                        continue
-                    }
-                }
-                
-                // if they have the exact same date, they might be a duplicate!
-                // ensure we compare the media subtypes, so that HDR copies aren'tmarked as duplicates
-                if (toCompare.creationDate == toMatch.creationDate && toCompare.mediaSubtypes == toMatch.mediaSubtypes) {
-                    
-                    // if the duplicates doesn't already contain this key
-                    if (!self.duplicates.keys.contains(toMatch)) {
-                        self.duplicates[toMatch] = []
-                        self.duplicateItems.append(DuplicateItem(image: toMatch))
-                    }
-                    
-                    // add this into the list!
-                    self.duplicates[toMatch]!.append(DuplicateItem(image: toMatch))
-                    
-                }
-                
-                // increase the counter
-                outerCount += 1
-                
-            }
-            
-            // increase the counter!
-            innerCount += 1
-            outerCount = 0
-            
-        }
+        })
         
         self.running = false
 
+    }
+    
+    // if we've aleady found this iamge!
+    func imageAlreadyInDuplicates(toMatch: PHAsset) -> Bool {
+        
+        var alreadyFound = false
+        for (duplicate, _) in self.duplicates {
+            if imageIsDuplicate(lhs: toMatch, rhs: duplicate) {
+                alreadyFound = true
+                break
+            }
+        }
+        
+        return alreadyFound
+        
+    }
+    
+    // the image reverse is alredy in the duplicates!
+    func imageReverseAlreadyInDuplicates(toCompare: PHAsset, toMatch: PHAsset) -> Bool {
+        
+        // if we've already got the to match image in here, and the opposite duplicate, continue!
+        var alreadyFound = false
+        if (self.duplicates.keys.contains(toCompare)) {
+            self.duplicates[toCompare]!.forEach( { duplicate in
+                if imageIsDuplicate(lhs: toMatch, rhs: duplicate.image) {
+                    alreadyFound = true
+                }
+            })
+        }
+        
+        return alreadyFound
+        
+    }
+    
+    // check a single image!
+    func checkSingleImage(matchIndex: Int, toMatch: PHAsset, allPhotos: PHFetchResult<PHAsset>) {
+        
+        // if the image is aleady in the duplicates!
+        if imageAlreadyInDuplicates(toMatch: toMatch) {
+            return
+        }
+        
+        // go through each of the photos
+        allPhotos.enumerateObjects({ (toCompare, compareIndex, stop) in
+            
+            // if we've stopped already!
+            if (!self.running) {
+                print("Stopping outer")
+                stop.pointee = true
+                return
+            }
+
+            // ignore images with the same index (we don't want to mark the image as a duplicate of itself!
+            // also ignore cases where the reverse is already in the duplicates (I.E. if we already have A -> B in our duplicates, we should not add B -> A)
+            // finally make sure this is actually a duplicate!
+            if
+                compareIndex != matchIndex &&
+                !imageReverseAlreadyInDuplicates(toCompare: toCompare, toMatch: toMatch) &&
+                imageIsDuplicate(lhs: toMatch, rhs: toCompare)
+            {
+                
+                // if the duplicates doesn't already contain this key
+                if (!self.duplicates.keys.contains(toMatch)) {
+                    self.duplicates[toMatch] = []
+                    self.duplicateItems.append(DuplicateItem(image: toMatch))
+                }
+                
+                // add this into the list!
+                self.duplicates[toMatch]!.append(DuplicateItem(image: toCompare))
+                
+            }
+            
+        })
+        
     }
     
 }
 
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
-        ContentView()
+        Group {
+            ContentView()
+                .frame(minWidth: 800, maxWidth: .infinity, minHeight: 600, maxHeight: .infinity)
+        }
+            
     }
 }
